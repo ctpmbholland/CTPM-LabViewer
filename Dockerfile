@@ -14,9 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App source — copy only what the app needs
 COPY CTPM-LabViewer_latest.py .
 COPY wo_efficiency.py .
-COPY "CTPM-Logo_thumbnail reduced.png" .
+COPY ["CTPM-Logo_thumbnail reduced.png", "."]
 COPY CTPM-Weekly-Report/utils/ ./CTPM-Weekly-Report/utils/
-COPY CTPM-Weekly-Report/__init__.py* ./CTPM-Weekly-Report/ 2>/dev/null || true
 
 # Pre-create cache directories so the app can write to them
 RUN mkdir -p .ctpm_cache/uploads .ctpm_cache/parquet
