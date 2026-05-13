@@ -1082,6 +1082,7 @@ def _login_ui(conn, source: str = "unknown"):
         submitted = st.form_submit_button("Login", type="primary")
 
     if submitted:
+        u = u.strip()
         rec = _get_user(conn, u)
         if rec and rec["active"] and _verify_pw(
             p, {"salt": rec["password_salt"], "iters": rec["password_iters"], "hash": rec["password_hash"]}
