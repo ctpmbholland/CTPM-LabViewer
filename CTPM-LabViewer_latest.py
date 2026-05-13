@@ -67,10 +67,10 @@ except Exception as e:
 APP_TITLE = "CTPM_LabViewer"
 DEFAULT_DATA_FILE = r"C:\\Users\\bholl\\Documents\\CTPM-Calibration-Dashboard\\All Data.xlsx"
 DEFAULT_CERT_ROOT = r"S:\\Shared With Me\\CTPM"
-DEFAULT_NOTES_DB = str(CACHE_DIR / ".ctpm_notes.sqlite")
 LOGO_PATH = "CTPM-Logo_thumbnail reduced.png"
 CACHE_DIR = Path(os.environ.get("CTPM_CACHE_DIR", ".ctpm_cache")); CACHE_DIR.mkdir(parents=True, exist_ok=True)
 PARQUET_DIR = CACHE_DIR / "parquet"; PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_NOTES_DB = str(CACHE_DIR / ".ctpm_notes.sqlite")
 LAB_ZIP_DEFAULT = os.environ.get("CTPM_LAB_ZIP", "45430")
 PRESETS_FILE = Path('.ctpm_presets.json')
 THEMES_FILE = Path('.ctpm_themes.json')
