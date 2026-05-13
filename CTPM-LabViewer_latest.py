@@ -1016,6 +1016,27 @@ def _get_user(conn, username: str):
     u, role, ph, ps, it, active = r
     return {"username":u, "role":role, "password_hash":ph, "password_salt":ps, "password_iters":it, "active":bool(active)}
 
+def _ensure_db_user(conn, username: str, plaintext_pw: str):
+    """Upsert a user row so the DB stays consistent after an env-var login."""
+    try:
+        now = _dt.now(_tz.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+        rec = _hash_pw(plaintext_pw)
+        existing = conn.execute("SELECT 1 FROM users WHERE username=? LIMIT 1;", (username,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE users SET password_hash=?, password_salt=?, password_iters=?, last_login_at=?, updated_at=? WHERE username=?;",
+                (rec['hash'], rec['salt'], rec['iters'], now, now, username)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO users(username,role,password_hash,password_salt,password_iters,active,created_at,updated_at,last_login_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?);",
+                (username, 'admin', rec['hash'], rec['salt'], rec['iters'], 1, now, now, now)
+            )
+        conn.commit()
+    except Exception:
+        pass
+
 def _record_login(conn, username: str):
     now = _dt.now(_tz.utc).isoformat(timespec="seconds").replace('+00:00','Z')
     conn.execute("UPDATE users SET last_login_at=?, updated_at=? WHERE username=?;", (now, now, username)); conn.commit()
@@ -1079,22 +1100,34 @@ def _login_ui(conn, source: str = "unknown"):
 
     if submitted:
         u = u.strip()
-        rec = _get_user(conn, u)
-        if rec and rec["active"] and _verify_pw(
-            p, {"salt": rec["password_salt"], "iters": rec["password_iters"], "hash": rec["password_hash"]}
-        ):
-            st.session_state["auth"] = {
-                "is_authenticated": True,
-                "username": rec["username"],
-                "role": rec["role"],
-            }
-            _record_login(conn, u)
-            st.success(f"Welcome, {u}!")
-            st.rerun()      # single rerun happens here, right after success
-        elif rec and not rec["active"]:
-            st.error("This account is deactivated.")
+        p = p.strip()
+        # --- env-var super-admin (no DB, no hashing, always works) ---
+        _env_user = os.environ.get("CTPM_ADMIN_USER", "admin").strip()
+        _env_pw   = os.environ.get("CTPM_ADMIN_PASS", "").strip()
+        if _env_pw and u.lower() == _env_user.lower() and p == _env_pw:
+            _ensure_db_user(conn, _env_user, _env_pw)
+            st.session_state["auth"] = {"is_authenticated": True, "username": _env_user, "role": "admin"}
+            st.success(f"Welcome, {_env_user}!")
+            st.rerun()
         else:
-            st.error("Invalid username or password.")
+            rec = _get_user(conn, u)
+            if rec and rec["active"] and _verify_pw(
+                p, {"salt": rec["password_salt"], "iters": rec["password_iters"], "hash": rec["password_hash"]}
+            ):
+                st.session_state["auth"] = {
+                    "is_authenticated": True,
+                    "username": rec["username"],
+                    "role": rec["role"],
+                }
+                _record_login(conn, u)
+                st.success(f"Welcome, {u}!")
+                st.rerun()
+            elif rec and not rec["active"]:
+                st.error("This account is deactivated.")
+            else:
+                # Show which env var controls the admin password
+                _hint = f"(admin username: **{_env_user}**)" if _env_pw else "(set CTPM_ADMIN_PASS in Railway to override)"
+                st.error(f"Invalid username or password. {_hint}")
 
 
 def require_auth(allowed_roles: List[str] | None = None):
