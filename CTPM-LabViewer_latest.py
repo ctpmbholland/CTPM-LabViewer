@@ -1008,25 +1008,6 @@ def _verify_pw(pw: str, rec: dict) -> bool:
     return _b.b64encode(dk).decode() == rec["hash"]
 
 
-def _seed_default_admin():
-    """Create a default admin account if CTPM_ADMIN_PASS is set and no users exist."""
-    _pw = os.environ.get("CTPM_ADMIN_PASS", "")
-    if not _pw:
-        return
-    _user = os.environ.get("CTPM_ADMIN_USER", "admin")
-    conn = _auth_conn(AUTH_DB_PATH)
-    if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-        return  # users already exist
-    _rec = _hash_pw(_pw)
-    _now = _dt.now(_tz.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    conn.execute(
-        "INSERT INTO users(username,role,password_hash,password_salt,password_iters,active,created_at,updated_at)"
-        " VALUES (?,?,?,?,?,?,?,?);",
-        (_user, "admin", _rec["hash"], _rec["salt"], _rec["iters"], 1, _now, _now),
-    )
-    conn.commit()
-
-_seed_default_admin()
 
 def _get_user(conn, username: str):
     cur = conn.execute("SELECT username, role, password_hash, password_salt, password_iters, active FROM users WHERE username=?;", (username,))
@@ -1040,24 +1021,39 @@ def _record_login(conn, username: str):
     conn.execute("UPDATE users SET last_login_at=?, updated_at=? WHERE username=?;", (now, now, username)); conn.commit()
 
 def _bootstrap_admin_if_needed(conn) -> bool:
-    """Create admin/admin123! once, do nothing if it already exists.
-       Returns True if created, False otherwise."""
+    """Create or sync the admin account.
+    Password priority: CTPM_ADMIN_PASS env var → fallback 'admin123!'.
+    If CTPM_ADMIN_PASS is set, the stored password is always kept in sync with it
+    so changing the env var on Railway instantly takes effect on next page load.
+    Returns True if any change was made."""
+    env_pw   = os.environ.get("CTPM_ADMIN_PASS", "")
+    env_user = os.environ.get("CTPM_ADMIN_USER", "admin")
+    password = env_pw if env_pw else "admin123!"
     try:
-        cur = conn.execute("SELECT 1 FROM users WHERE username=? LIMIT 1;", ('admin',))
+        cur = conn.execute("SELECT 1 FROM users WHERE username=? LIMIT 1;", (env_user,))
+        now = _dt.now(_tz.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         if cur.fetchone():
-            return False  # already present
-
-        rec = _hash_pw('admin123!')
-        now = _dt.now(_tz.utc).isoformat(timespec='seconds').replace('+00:00','Z')
+            # User already exists. If env var is set, sync the password so it always matches.
+            if env_pw:
+                rec = _hash_pw(env_pw)
+                conn.execute(
+                    "UPDATE users SET password_hash=?, password_salt=?, password_iters=?, updated_at=?"
+                    " WHERE username=?;",
+                    (rec['hash'], rec['salt'], rec['iters'], now, env_user)
+                )
+                conn.commit()
+                return True
+            return False
+        # No user yet — create one.
+        rec = _hash_pw(password)
         conn.execute(
             "INSERT INTO users(username,role,password_hash,password_salt,password_iters,active,created_at,updated_at) "
             "VALUES (?,?,?,?,?,?,?,?);",
-            ('admin', 'admin', rec['hash'], rec['salt'], rec['iters'], 1, now, now)
+            (env_user, 'admin', rec['hash'], rec['salt'], rec['iters'], 1, now, now)
         )
         conn.commit()
         return True
     except Exception:
-        # Final safety: if a concurrent pass inserts first, ignore the uniqueness error
         try:
             conn.rollback()
         except Exception:
@@ -1106,9 +1102,7 @@ def require_auth(allowed_roles: List[str] | None = None):
     if not auth.get("is_authenticated"):
         conn = _auth_conn(AUTH_DB_PATH)
 
-        if _bootstrap_admin_if_needed(conn):
-            st.info("Bootstrap admin 'admin' created. Log in to continue.")
-
+        _bootstrap_admin_if_needed(conn)
         _login_ui(conn, source="require-auth")
         st.stop()
 
