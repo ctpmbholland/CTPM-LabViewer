@@ -700,7 +700,7 @@ def _register_altair_theme():
 def _enable_ctpm_theme():
     """Register + enable the CTPM altair theme. Safe to call multiple times."""
     _register_altair_theme()
-    _enable_ctpm_theme()
+    alt.themes.enable("ctpm")
 
 # ======= Header =======
 def brand_header():
