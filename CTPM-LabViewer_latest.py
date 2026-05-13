@@ -2815,13 +2815,17 @@ elif page=="📦 WIP Tracking":
     # ---- Work Orders — grouped expanders ----
     st.markdown("<div class='section-title'>Work Orders</div>", unsafe_allow_html=True)
 
-    wo_summary = wip_noted.groupby('Work Order').agg(
-        company=('Company', 'first'),
-        item_count=('I.D.', 'nunique'),
-        oldest_days=('Days_In_Shop', 'max'),
-        median_days=('Days_In_Shop', 'median'),
-        wo_status=('Status', 'first'),
-    ).reset_index().sort_values('oldest_days', ascending=False)
+    _wip_agg = {
+        'company':     ('Company', 'first'),
+        'item_count':  ('I.D.', 'nunique'),
+        'oldest_days': ('Days_In_Shop', 'max'),
+        'median_days': ('Days_In_Shop', 'median'),
+    }
+    if 'Status' in wip_noted.columns:
+        _wip_agg['wo_status'] = ('Status', 'first')
+    wo_summary = wip_noted.groupby('Work Order').agg(**_wip_agg).reset_index().sort_values('oldest_days', ascending=False)
+    if 'wo_status' not in wo_summary.columns:
+        wo_summary['wo_status'] = ''
 
     WO_DISPLAY_LIMIT = 50
     show_all = False
@@ -4857,42 +4861,54 @@ elif page == "📤 Upload Data":
             _ext = Path(_uf.name).suffix.lower()
             _engine = "xlrd" if _ext == ".xls" else "openpyxl"
             _dest = _upl_dir / f"{_key}{_ext}"
-            for _old_ext in (".xlsx", ".xls"):
-                _old = _upl_dir / f"{_key}{_old_ext}"
-                if _old.exists() and _old != _dest:
-                    try: _old.unlink()
-                    except Exception: pass
-
-            # Buffer once — use for disk write AND Parquet (no re-read from disk)
-            _buf = BytesIO(_uf.read())
-            with open(_dest, "wb") as _fh:
-                _fh.write(_buf.getvalue())
-            _s3_upload(_dest)
-
-            # Write Parquet immediately from the in-memory buffer
             _pq_name, _keep = _PQ_KEY_MAP.get(_key, (None, None))
-            if _pq_name is not None:
-                _s = _dest.stat()
-                _file_hash = _sig_hash((float(_s.st_mtime), int(_s.st_size)))
-                _pq_dest = PARQUET_DIR / f"{_pq_name}_{_file_hash}.parquet"
-                try:
-                    _buf.seek(0)
-                    if _keep:
-                        _hdr = pd.read_excel(_buf, nrows=0, engine=_engine)
-                        _cols = [c for c in _keep if c in _hdr.columns] or None
-                        _buf.seek(0)
-                        _df = pd.read_excel(_buf, usecols=_cols, engine=_engine)
-                    else:
-                        _df = pd.read_excel(_buf, engine=_engine)
-                    _df.to_parquet(_pq_dest, index=False)
-                    del _df
-                except Exception:
-                    pass  # non-fatal; loader will read Excel on next load
 
-            del _buf
-            _gc.collect()
-            st.success(f"✅ {_label} saved ({_dest.stat().st_size / 1024:.0f} KB)")
-            _any_saved = True
+            # Check if this exact file is already saved + Parquet exists.
+            # Streamlit keeps the file in the widget across reruns, so without
+            # this check the app reruns forever re-saving the same file.
+            _already_done = False
+            if _dest.exists() and _dest.stat().st_size == _uf.size and _pq_name:
+                _existing_hash = _sig_hash((float(_dest.stat().st_mtime), int(_dest.stat().st_size)))
+                _already_done = (PARQUET_DIR / f"{_pq_name}_{_existing_hash}.parquet").exists()
+
+            if _already_done:
+                st.info(f"✅ {_label} already loaded — no change detected.")
+            else:
+                for _old_ext in (".xlsx", ".xls"):
+                    _old = _upl_dir / f"{_key}{_old_ext}"
+                    if _old.exists() and _old != _dest:
+                        try: _old.unlink()
+                        except Exception: pass
+
+                # Buffer once — use for disk write AND Parquet (no re-read from disk)
+                _buf = BytesIO(_uf.read())
+                with open(_dest, "wb") as _fh:
+                    _fh.write(_buf.getvalue())
+                _s3_upload(_dest)
+
+                # Write Parquet immediately from the in-memory buffer
+                if _pq_name is not None:
+                    _s = _dest.stat()
+                    _file_hash = _sig_hash((float(_s.st_mtime), int(_s.st_size)))
+                    _pq_dest = PARQUET_DIR / f"{_pq_name}_{_file_hash}.parquet"
+                    try:
+                        _buf.seek(0)
+                        if _keep:
+                            _hdr = pd.read_excel(_buf, nrows=0, engine=_engine)
+                            _cols = [c for c in _keep if c in _hdr.columns] or None
+                            _buf.seek(0)
+                            _df = pd.read_excel(_buf, usecols=_cols, engine=_engine)
+                        else:
+                            _df = pd.read_excel(_buf, engine=_engine)
+                        _df.to_parquet(_pq_dest, index=False)
+                        del _df
+                    except Exception:
+                        pass  # non-fatal; loader will read Excel on next load
+
+                del _buf
+                _gc.collect()
+                st.success(f"✅ {_label} saved ({_dest.stat().st_size / 1024:.0f} KB)")
+                _any_saved = True
 
     if _any_saved:
         # Old Parquet files are auto-ignored by the per-file sig hash naming;
