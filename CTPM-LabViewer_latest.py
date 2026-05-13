@@ -1193,29 +1193,66 @@ EQUIP_KEEP = ["Company","I.D.","Description","Manufacturer","Model Number","Last
 
 @st.cache_data(ttl=1200, show_spinner=False)
 def load_clean_data(path: str, sig) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    h = _sig_hash(sig)
-    pq_wos   = PARQUET_DIR / f"wos_{h}.parquet"
-    pq_events = PARQUET_DIR / f"events_{h}.parquet"
-    pq_equip = PARQUET_DIR / f"equip_{h}.parquet"
+    import gc
 
-    # Fast path: Parquet cache exists for this version of the data
-    if pq_wos.exists() and pq_events.exists() and pq_equip.exists():
-        return pd.read_parquet(pq_wos), pd.read_parquet(pq_events), pd.read_parquet(pq_equip)
-
-    # Check for individually-uploaded sheet files
     sheets = _upl_sheet_paths()
     using_individual = sheets["events"] is not None and sheets["equipment"] is not None
 
     if using_individual:
-        wos   = _read_sheet_file(sheets["wos"],       WOS_KEEP)   if sheets["wos"]       else pd.DataFrame(columns=WOS_KEEP)
-        events = _read_sheet_file(sheets["events"],   EVENTS_KEEP)
-        equip  = _read_sheet_file(sheets["equipment"], EQUIP_KEEP)
+        # sig is a tuple-of-tuples from _individual_sheets_sig():
+        # index 0=wos, 1=events, 2=equipment, 3=all_companies, 4=wip_shop
+        # Use per-file Parquet so each sheet is cached independently.
+        def _pq(name, idx):
+            if isinstance(sig, tuple) and idx < len(sig) and sig[idx] != (0.0, 0):
+                return PARQUET_DIR / f"{name}_{_sig_hash(sig[idx])}.parquet"
+            return None
+
+        pq = _pq("wos", 0)
+        if pq and pq.exists():
+            wos = pd.read_parquet(pq)
+        elif sheets["wos"]:
+            wos = _read_sheet_file(sheets["wos"], WOS_KEEP)
+            if pq:
+                try: wos.to_parquet(pq, index=False)
+                except Exception: pass
+        else:
+            wos = pd.DataFrame(columns=WOS_KEEP)
+        gc.collect()
+
+        pq = _pq("events", 1)
+        if pq and pq.exists():
+            events = pd.read_parquet(pq)
+        else:
+            events = _read_sheet_file(sheets["events"], EVENTS_KEEP)
+            if pq:
+                try: events.to_parquet(pq, index=False)
+                except Exception: pass
+        gc.collect()
+
+        pq = _pq("equip", 2)
+        if pq and pq.exists():
+            equip = pd.read_parquet(pq)
+        else:
+            equip = _read_sheet_file(sheets["equipment"], EQUIP_KEEP)
+            if pq:
+                try: equip.to_parquet(pq, index=False)
+                except Exception: pass
+        gc.collect()
+
     else:
-        # Fall back to combined All Data workbook
+        # Combined All Data workbook — composite hash for all sheets
+        h = _sig_hash(sig)
+        pq_wos    = PARQUET_DIR / f"wos_{h}.parquet"
+        pq_events = PARQUET_DIR / f"events_{h}.parquet"
+        pq_equip  = PARQUET_DIR / f"equip_{h}.parquet"
+
+        if pq_wos.exists() and pq_events.exists() and pq_equip.exists():
+            return pd.read_parquet(pq_wos), pd.read_parquet(pq_events), pd.read_parquet(pq_equip)
+
         p = Path(sanitize_path(path))
         if not p.exists():
             raise FileNotFoundError(f"Data file not found: {p}")
-        engine = "openpyxl" if p.suffix.lower() in (".xlsx",".xlsm") else "xlrd"
+        engine = "openpyxl" if p.suffix.lower() in (".xlsx", ".xlsm") else "xlrd"
         xl = pd.ExcelFile(p, engine=engine)
         for need in ("All Events", "All Equipment"):
             if need not in xl.sheet_names:
@@ -1229,8 +1266,18 @@ def load_clean_data(path: str, sig) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Data
             )
 
         wos    = _usecols("All WOs", WOS_KEEP) if "All WOs" in xl.sheet_names else pd.DataFrame(columns=WOS_KEEP)
+        gc.collect()
         events = _usecols("All Events", EVENTS_KEEP)
+        gc.collect()
         equip  = _usecols("All Equipment", EQUIP_KEEP)
+        gc.collect()
+
+        try:
+            wos.to_parquet(pq_wos, index=False)
+            events.to_parquet(pq_events, index=False)
+            equip.to_parquet(pq_equip, index=False)
+        except Exception:
+            pass
 
     for c in ("Open Date", "Due Date", "Completed Date", "Last Modified"):
         if c in wos.columns:
@@ -1242,30 +1289,27 @@ def load_clean_data(path: str, sig) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Data
 
     if "IN SHOP" in equip.columns:
         s = equip["IN SHOP"].astype(str).str.strip().str.lower()
-        equip["IN_SHOP"] = s.isin(["true","yes","1","y"])
+        equip["IN_SHOP"] = s.isin(["true", "yes", "1", "y"])
     elif "In Shop" in equip.columns:
         s = equip["In Shop"].astype(str).str.strip().str.lower()
-        equip["IN_SHOP"] = s.isin(["true","yes","1","y"])
+        equip["IN_SHOP"] = s.isin(["true", "yes", "1", "y"])
     else:
         equip["IN_SHOP"] = False
-
-    try:
-        wos.to_parquet(pq_wos, index=False)
-        events.to_parquet(pq_events, index=False)
-        equip.to_parquet(pq_equip, index=False)
-    except Exception:
-        pass
 
     return wos, events, equip
 
 
 @st.cache_data(ttl=1200, show_spinner=False)
 def load_companies_df(path: str, sig) -> pd.DataFrame:
-    pq = PARQUET_DIR / f"companies_{_sig_hash(sig)}.parquet"
+    # Per-file Parquet when using individual uploads (sig index 3 = all_companies)
+    sheets = _upl_sheet_paths()
+    if sheets["all_companies"] and isinstance(sig, tuple) and len(sig) > 3 and isinstance(sig[3], tuple):
+        pq = PARQUET_DIR / f"companies_{_sig_hash(sig[3])}.parquet"
+    else:
+        pq = PARQUET_DIR / f"companies_{_sig_hash(sig)}.parquet"
     if pq.exists():
         return pd.read_parquet(pq)
 
-    sheets = _upl_sheet_paths()
     if sheets["all_companies"]:
         df = _read_sheet_file(sheets["all_companies"], [])
     else:
@@ -1294,11 +1338,15 @@ def load_companies_df(path: str, sig) -> pd.DataFrame:
 
 @st.cache_data(ttl=1200, show_spinner=False)
 def load_wip_shop_df(path: str, sig) -> pd.DataFrame:
-    pq = PARQUET_DIR / f"wip_shop_{_sig_hash(sig)}.parquet"
+    # Per-file Parquet when using individual uploads (sig index 4 = wip_shop)
+    sheets = _upl_sheet_paths()
+    if sheets["wip_shop"] and isinstance(sig, tuple) and len(sig) > 4 and isinstance(sig[4], tuple):
+        pq = PARQUET_DIR / f"wip_shop_{_sig_hash(sig[4])}.parquet"
+    else:
+        pq = PARQUET_DIR / f"wip_shop_{_sig_hash(sig)}.parquet"
     if pq.exists():
         return pd.read_parquet(pq)
 
-    sheets = _upl_sheet_paths()
     if sheets["wip_shop"]:
         df = _read_sheet_file(sheets["wip_shop"], [])
     else:
@@ -4787,6 +4835,14 @@ elif page == "📤 Upload Data":
     st.divider()
 
     # --- Individual uploaders ---
+    # Parquet key map: upload key → (parquet name prefix, column keep-list)
+    _PQ_KEY_MAP = {
+        "wos":          ("wos",       WOS_KEEP),
+        "events":       ("events",    EVENTS_KEEP),
+        "equipment":    ("equip",     EQUIP_KEEP),
+        "all_companies":("companies", []),
+        "wip_shop":     ("wip_shop",  []),
+    }
     _any_saved = False
     for _key, _label, _req, _hint in _UPL_SLOTS:
         _tag = "required" if _req else "optional"
@@ -4797,33 +4853,55 @@ elif page == "📤 Upload Data":
             help=_hint,
         )
         if _uf is not None:
+            import gc as _gc
             _ext = Path(_uf.name).suffix.lower()
+            _engine = "xlrd" if _ext == ".xls" else "openpyxl"
             _dest = _upl_dir / f"{_key}{_ext}"
-            # Remove old version with different extension first
             for _old_ext in (".xlsx", ".xls"):
                 _old = _upl_dir / f"{_key}{_old_ext}"
                 if _old.exists() and _old != _dest:
-                    try:
-                        _old.unlink()
-                    except Exception:
-                        pass
+                    try: _old.unlink()
+                    except Exception: pass
+
+            # Buffer once — use for disk write AND Parquet (no re-read from disk)
+            _buf = BytesIO(_uf.read())
             with open(_dest, "wb") as _fh:
-                _fh.write(_uf.read())
-            _s3_upload(_dest)  # best-effort cloud backup
+                _fh.write(_buf.getvalue())
+            _s3_upload(_dest)
+
+            # Write Parquet immediately from the in-memory buffer
+            _pq_name, _keep = _PQ_KEY_MAP.get(_key, (None, None))
+            if _pq_name is not None:
+                _s = _dest.stat()
+                _file_hash = _sig_hash((float(_s.st_mtime), int(_s.st_size)))
+                _pq_dest = PARQUET_DIR / f"{_pq_name}_{_file_hash}.parquet"
+                try:
+                    _buf.seek(0)
+                    if _keep:
+                        _hdr = pd.read_excel(_buf, nrows=0, engine=_engine)
+                        _cols = [c for c in _keep if c in _hdr.columns] or None
+                        _buf.seek(0)
+                        _df = pd.read_excel(_buf, usecols=_cols, engine=_engine)
+                    else:
+                        _df = pd.read_excel(_buf, engine=_engine)
+                    _df.to_parquet(_pq_dest, index=False)
+                    del _df
+                except Exception:
+                    pass  # non-fatal; loader will read Excel on next load
+
+            del _buf
+            _gc.collect()
             st.success(f"✅ {_label} saved ({_dest.stat().st_size / 1024:.0f} KB)")
             _any_saved = True
 
     if _any_saved:
-        # Clear Parquet cache so new data is picked up
-        for _pf in PARQUET_DIR.glob("*.parquet"):
-            try:
-                _pf.unlink()
-            except Exception:
-                pass
+        # Old Parquet files are auto-ignored by the per-file sig hash naming;
+        # no need to delete them. Just clear in-memory cache so next load
+        # uses the freshly-written Parquet instead of cached stale data.
         st.cache_data.clear()
         for _k in ("__aging__", "__wip__", "__tatroll__"):
             st.session_state.pop(_k, None)
-        st.info("Cache cleared. Reloading with new data…")
+        st.info("Files cached as Parquet. Navigate to **🏠 Dashboard** to load your data.")
         st.rerun()
 
     st.divider()
