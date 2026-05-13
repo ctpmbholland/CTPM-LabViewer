@@ -2454,23 +2454,7 @@ else:
     st.title('🔐 Sign in to CTPM_LabViewer')
     conn = _auth_conn(AUTH_DB_PATH)
 
-    try:
-        user_count = conn.execute('SELECT COUNT(*) FROM users;').fetchone()[0]
-    except Exception:
-        user_count = 0
-
-    if user_count == 0:
-        rec = _hash_pw('admin123!')
-        now = _dt.now(_tz.utc).isoformat(timespec='seconds').replace('+00:00','Z')
-        conn.execute(
-            'INSERT INTO users(username,role,password_hash,password_salt,password_iters,active,created_at,updated_at) '
-            'VALUES (?,?,?,?,?,?,?,?);',
-            ('admin','admin',rec['hash'],rec['salt'],rec['iters'],1,now,now)
-        )
-        conn.commit()
-        st.info("Bootstrap admin 'admin' created. Use password: admin123! (change it after login)")
-
-    _login_ui(conn, source="global-gate")  # draw the form only while unauthenticated
+    _login_ui(conn, source="global-gate")  # env-var admin bypass is inside _login_ui
     st.stop()                              # <- halt the page on this pass
 
 # ======= CSS + Header (render only after auth) =======
@@ -2494,27 +2478,29 @@ try:
         companies    = load_companies_df(path, sig)
         wip_shop_df  = load_wip_shop_df(path, sig)
 except FileNotFoundError:
-    st.warning(
-        "**No data file found.** "
-        "Please go to **📤 Upload Data** and upload your IndySoft exports to get started."
-    )
+    # No data uploaded yet — go straight to Upload page without rerunning
+    # (rerunning would loop forever since the file still won't exist)
+    wos = events = equip = pd.DataFrame()
+    companies = pd.DataFrame()
+    wip_shop_df = pd.DataFrame()
     st.session_state['nav_page'] = "📤 Upload Data"
-    st.rerun()
+    aging_all = wc_all = tat_roll_all = pd.DataFrame()
+    sig = (0.0, 0)
 except Exception as ex:
     st.error(f"Failed to load workbook: {ex}")
     st.stop()
+else:
+    # Cache computed views for this run (only when data loaded successfully)
+    if '__aging__' not in st.session_state:
+        st.session_state['__aging__'] = compute_aging_from_file(path, sig)
+    if '__wip__' not in st.session_state:
+        st.session_state['__wip__'] = wip_chain(path, sig, equip)
+    if '__tatroll__' not in st.session_state:
+        st.session_state['__tatroll__'] = rolling_tat_365d_from_file(path, sig)
 
-# Cache computed views for this run
-if '__aging__' not in st.session_state:
-    st.session_state['__aging__'] = compute_aging_from_file(path, sig)
-if '__wip__' not in st.session_state:
-    st.session_state['__wip__'] = wip_chain(path, sig, equip)
-if '__tatroll__' not in st.session_state:
-    st.session_state['__tatroll__'] = rolling_tat_365d_from_file(path, sig)
-
-aging_all = st.session_state['__aging__']
-wc_all = st.session_state['__wip__']
-tat_roll_all = st.session_state['__tatroll__']
+    aging_all = st.session_state['__aging__']
+    wc_all    = st.session_state['__wip__']
+    tat_roll_all = st.session_state['__tatroll__']
 
 PAGES = [
     "🏠 Dashboard",
