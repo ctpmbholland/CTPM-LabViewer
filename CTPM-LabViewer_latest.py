@@ -15,12 +15,33 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 
+import importlib
+
 import pandas as pd
 import numpy as np
-import altair as alt
-import plotly.express as px
 import streamlit as st
-import pgeocode
+
+
+class _Lazy:
+    """Defer a heavy import until first attribute access."""
+    __slots__ = ("_name", "_mod")
+    def __init__(self, name):
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_mod", None)
+    def _load(self):
+        if object.__getattribute__(self, "_mod") is None:
+            object.__setattr__(self, "_mod", importlib.import_module(object.__getattribute__(self, "_name")))
+    def __getattr__(self, attr):
+        self._load()
+        return getattr(object.__getattribute__(self, "_mod"), attr)
+    def __repr__(self):
+        return f"<lazy {object.__getattribute__(self, '_name')}>"
+
+# Heavy libraries — imported on first use (saves 7-12 s on cold start for
+# pages that don't need charts, e.g. Upload Data and Admin).
+alt = _Lazy("altair")
+px  = _Lazy("plotly.express")
+pgeocode = _Lazy("pgeocode")
 
 
 
@@ -660,18 +681,27 @@ def _altair_theme_config():
         }
     }
 
-try:
-    # Altair >= 5.5 prefers alt.theme API
-    if hasattr(alt, 'theme') and hasattr(alt.theme, 'register'):
-        @alt.theme.register(ALT_THEME_NAME, enable=True)
-        def _ctpm_theme():
-            cfg = _altair_theme_config()
-            return alt.theme.ThemeConfig(cfg.get('config', {}))
-    else:
-        alt.themes.register(ALT_THEME_NAME, _altair_theme_config)
-        alt.themes.enable(ALT_THEME_NAME)
-except Exception:
-    pass
+@st.cache_resource(show_spinner=False)
+def _register_altair_theme():
+    """Register the CTPM altair theme once (deferred until first chart page)."""
+    try:
+        import altair as _alt_real
+        if hasattr(_alt_real, 'theme') and hasattr(_alt_real.theme, 'register'):
+            @_alt_real.theme.register(ALT_THEME_NAME, enable=True)
+            def _ctpm_theme():
+                cfg = _altair_theme_config()
+                return _alt_real.theme.ThemeConfig(cfg.get('config', {}))
+        else:
+            _alt_real.themes.register(ALT_THEME_NAME, _altair_theme_config)
+            _alt_real.themes.enable(ALT_THEME_NAME)
+    except Exception:
+        pass
+
+def _enable_ctpm_theme():
+    """Register + enable the CTPM altair theme. Safe to call multiple times."""
+    _register_altair_theme()
+    _enable_ctpm_theme()
+
 # ======= Header =======
 def brand_header():
     col_logo, col_title, col_tools, col_account = st.columns([1,6,2,2])
@@ -1331,7 +1361,9 @@ def locate_efficiency_files(data_file_path: str) -> Tuple[Path, Path]:
 
 # ================= Geocoding & Distances =================
 @st.cache_resource(show_spinner=False)
-def pgeo(): return pgeocode.Nominatim('US')
+def pgeo():
+    import pgeocode as _pgeocode
+    return _pgeocode.Nominatim('US')
 
 def zip_to_latlon(zip_code: str) -> Optional[Tuple[float,float]]:
     try:
@@ -2463,20 +2495,19 @@ brand_header()
 
 # ======= Load data =======
 try:
-    with st.spinner("Loading workbook ..."):
-        _upl_sheets = _upl_sheet_paths()
-        _using_individual = _upl_sheets["events"] is not None and _upl_sheets["equipment"] is not None
+    _upl_sheets = _upl_sheet_paths()
+    _using_individual = _upl_sheets["events"] is not None and _upl_sheets["equipment"] is not None
 
-        if _using_individual:
-            path = st.session_state.get('data_file', DEFAULT_DATA_FILE)  # may not exist on cloud; ignored by loader
-            sig  = _individual_sheets_sig()
-        else:
-            path = sanitize_path(st.session_state['data_file'])
-            sig  = file_signature(path)
+    if _using_individual:
+        path = st.session_state.get('data_file', DEFAULT_DATA_FILE)
+        sig  = _individual_sheets_sig()
+    else:
+        path = sanitize_path(st.session_state['data_file'])
+        sig  = file_signature(path)
 
-        wos, events, equip = load_clean_data(path, sig)
-        companies    = load_companies_df(path, sig)
-        wip_shop_df  = load_wip_shop_df(path, sig)
+    wos, events, equip = load_clean_data(path, sig)
+    companies    = load_companies_df(path, sig)
+    wip_shop_df  = load_wip_shop_df(path, sig)
 except FileNotFoundError:
     # No data uploaded yet — go straight to Upload page without rerunning
     # (rerunning would loop forever since the file still won't exist)
@@ -2539,7 +2570,7 @@ page = st.session_state['nav_page']
 
 # ---- Dashboard ----
 if page=="🏠 Dashboard":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     _today = pd.Timestamp.today().normalize()
 
     # WIP Health — from WIP Shop sheet (authoritative current-shop list)
@@ -2620,7 +2651,7 @@ if page=="🏠 Dashboard":
 
 # ---- WIP Tracking ----
 elif page=="📦 WIP Tracking":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.markdown("<div class='section-title'>WIP Tracking — In Shop</div>", unsafe_allow_html=True)
 
     today = pd.Timestamp.today().normalize()
@@ -2793,7 +2824,7 @@ elif page=="📦 WIP Tracking":
 
 # ---- Ops — Assets & Due ----
 elif page=="🧰 Ops — Assets & Due":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Assets & Calibration Due")
     eq = equip.copy()
     if "Calibration Due" in eq.columns: eq["Calibration Due"] = pd.to_datetime(eq["Calibration Due"], errors='coerce')
@@ -2834,7 +2865,7 @@ elif page=="🧰 Ops — Assets & Due":
 
 # ---- Scheduling (Smart) — FULL ----
 elif page == "🗓️ Scheduling (Smart)":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Smart Scheduling — capacity · distance · due windows · policies · grouping · lateness penalty")
 
     settings = load_settings()
@@ -3367,7 +3398,7 @@ elif page == "🗓️ Scheduling (Smart)":
         st.warning('No schedule could be generated. Try relaxing windows, increasing capacity, or widening windows.')
 
 elif page == "🗺️ On‑Site Map":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("On‑Site Planning — ZIP bubbles (Shipping ZIP only) — scroll zoom · drag pan")
 
     settings = load_settings()
@@ -3640,7 +3671,7 @@ elif page == "🗺️ On‑Site Map":
                   "agg_zips_plotted_after_threshold": int(len(plot_df)), "latlon_metrics": ll_metrics})
 
 elif page=="⌛ Work Order Aging":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Work Order Aging")
 
     # Build/refresh the Aging dataset (from WOs + latest Tracking Status + Equipment status)
@@ -3806,7 +3837,7 @@ elif page=="⌛ Work Order Aging":
 
 
 elif page=="⏱️ TAT (Shop)":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Turnaround Time — Shop (overview)")
     wc = wc_all.copy()
 
@@ -3851,7 +3882,7 @@ elif page=="⏱️ TAT (Shop)":
 
 
 elif page=="👷 Technician Efficiency":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Technician Efficiency")
 
     st.caption(
@@ -4026,7 +4057,7 @@ elif page=="👷 Technician Efficiency":
         st.dataframe(dview, hide_index=True, column_config=build_date_column_config(dview))
         download_buttons(dview, base_name='technician_efficiency_line_items', key_prefix='te_drill')
 elif page=="📈 WO Efficiency":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     st.subheader("Work Order Efficiency")
     st.caption("WO outcomes come from All WOs export sub-table line items (Work Order + I.D.). Tech list uses COMPLETE lines only. Date filters default to YTD and do not rely on Receiving dates (field work often has none).")
 
@@ -4377,7 +4408,7 @@ elif page == "🔐 Admin — Users":
 
 # ---- Weekly Report ----
 elif page == "📋 Weekly Report":
-    alt.themes.enable("ctpm")
+    _enable_ctpm_theme()
     import sys as _sys
     import tempfile
     import os as _os
