@@ -658,6 +658,74 @@ def _inject_css(theme: Dict[str,str], kiosk_mode: bool=False):
       opacity: 0.6;
     }}
 
+    /* ── Block container ── */
+    .block-container {{
+      padding-top: 0.5rem !important;
+      padding-bottom: 2rem !important;
+    }}
+
+    /* ── App header card ── */
+    .ctpm-header-card {{
+      background: {surface_elevated};
+      border: 1px solid {border};
+      border-radius: var(--ctpm-radius-md);
+      padding: 10px 18px;
+      margin-bottom: 6px;
+      box-shadow: var(--ctpm-shadow-sm);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }}
+
+    /* ── Nav strip (JS adds .ctpm-nav-block to the stHorizontalBlock) ── */
+    .ctpm-nav-block {{
+      border-bottom: 2px solid {border} !important;
+      padding-bottom: 0 !important;
+      column-gap: 0 !important;
+      margin-bottom: 12px !important;
+    }}
+    .ctpm-nav-block > div[data-testid="stColumn"] {{
+      padding: 0 2px !important;
+      min-width: 0 !important;
+      flex-shrink: 1 !important;
+      flex-grow: 0 !important;
+    }}
+    .ctpm-nav-block button {{
+      background: transparent !important;
+      border: none !important;
+      border-bottom: 3px solid transparent !important;
+      border-radius: 0 !important;
+      color: {textc} !important;
+      opacity: 0.5 !important;
+      font-weight: 600 !important;
+      padding: 7px 8px !important;
+      font-size: 0.73rem !important;
+      box-shadow: none !important;
+      width: 100% !important;
+      margin-bottom: -2px !important;
+      letter-spacing: 0.1px !important;
+      transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+    }}
+    .ctpm-nav-block button:hover {{
+      opacity: 0.85 !important;
+      color: {theme['PRIMARY']} !important;
+      border-bottom-color: {theme['PRIMARY']}55 !important;
+      transform: none !important;
+      box-shadow: none !important;
+    }}
+    .ctpm-nav-block button[data-testid="stBaseButton-primary"] {{
+      color: {theme['PRIMARY']} !important;
+      opacity: 1 !important;
+      border-bottom: 3px solid {theme['PRIMARY']} !important;
+      font-weight: 800 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+    }}
+    .ctpm-nav-block button[data-testid="stBaseButton-primary"]:hover {{
+      transform: none !important;
+      filter: none !important;
+    }}
+
     {kiosk_css}
     """
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
@@ -704,18 +772,20 @@ def _enable_ctpm_theme():
 
 # ======= Header =======
 def brand_header():
-    col_logo, col_title, col_tools, col_account = st.columns([1,6,2,2])
+    col_logo, col_title, col_tools, col_account = st.columns([1, 7, 1, 2])
     with col_logo:
-        try: st.image(LOGO_PATH, )
+        try: st.image(LOGO_PATH, width=56)
         except Exception: st.write("")
     with col_title:
         st.markdown(
-            f"<h1 style='margin-bottom:0;color:var(--ctpm-primary);'>{APP_TITLE}</h1>"
-            f"<div style='color:var(--ctpm-secondary);font-weight:800;'>CTPM • Calibration Management</div>",
+            f"<div style='display:flex;flex-direction:column;justify-content:center;height:56px;'>"
+            f"<div style='font-size:1.25rem;font-weight:900;color:var(--ctpm-primary);line-height:1.1;letter-spacing:-0.3px;'>{APP_TITLE}</div>"
+            f"<div style='font-size:0.72rem;font-weight:600;color:var(--ctpm-secondary);opacity:0.75;letter-spacing:0.3px;text-transform:uppercase;margin-top:2px;'>CTPM • Calibration Management</div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
     with col_tools:
-        with st.popover("⚙️ Tools", ):
+        with st.popover("⚙️", ):
             st.caption("Admin")
             if st.button("🧹 Clear caches", key="btn_clear_cache"):
                 st.cache_data.clear()
@@ -775,12 +845,21 @@ def brand_header():
     with col_account:
         auth = st.session_state.get("auth", {})
         if auth.get("is_authenticated"):
-            st.caption(f"Signed in as **{auth.get('username','')}** ({auth.get('role','')})")
-            if st.button("🚪 Log out", key="btn_logout_header"):
+            st.markdown(
+                f"<div style='text-align:right;font-size:0.72rem;opacity:0.65;padding-top:4px;'>"
+                f"Signed in as <strong>{auth.get('username','')}</strong><br>"
+                f"<span style='opacity:0.7;'>({auth.get('role','')})</span></div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Log out", key="btn_logout_header", type="secondary"):
                 st.session_state.pop("auth", None); st.rerun()
         else:
             st.caption("Not signed in")
-    st.markdown("<div class='app-header-bar'></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='height:3px;background:linear-gradient(90deg,var(--ctpm-primary),var(--ctpm-accent),var(--ctpm-secondary));"
+        "border-radius:999px;margin:6px 0 8px;opacity:0.7;'></div>",
+        unsafe_allow_html=True
+    )
 
 # ======= Exports =======
 def download_buttons(df: pd.DataFrame, base_name: str, key_prefix: str) -> None:
@@ -2601,6 +2680,25 @@ if 'nav_page' not in st.session_state:
 if st.session_state['nav_page'] not in PAGES:
     st.session_state['nav_page'] = PAGES[0]
 
+st.markdown(
+    "<span id='ctpm-nav-anchor' style='display:none;height:0;margin:0;padding:0;'></span>"
+    "<script>(function(){"
+    "function tag(){"
+    "var a=document.getElementById('ctpm-nav-anchor');if(!a)return;"
+    "var ec=a.closest('.element-container,.stMarkdown,[class*=element]');if(!ec)return;"
+    "var p=ec.parentNode;if(!p)return;"
+    "var sibs=Array.from(p.children);var idx=sibs.indexOf(ec);"
+    "for(var i=idx+1;i<sibs.length;i++){"
+    "var hb=sibs[i].querySelector('[data-testid=\"stHorizontalBlock\"]');"
+    "if(!hb&&sibs[i].getAttribute('data-testid')==='stHorizontalBlock')hb=sibs[i];"
+    "if(hb){hb.classList.add('ctpm-nav-block');return;}"
+    "}"
+    "}"
+    "new MutationObserver(tag).observe(document.body,{childList:true,subtree:true});"
+    "tag();"
+    "})();</script>",
+    unsafe_allow_html=True
+)
 _nav_cols = st.columns(len(PAGES))
 _nav_clicked = None
 for _i, (_col, _p) in enumerate(zip(_nav_cols, PAGES)):
