@@ -20,6 +20,7 @@ import importlib
 import pandas as pd
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as _st_components
 
 
 class _Lazy:
@@ -2680,25 +2681,6 @@ if 'nav_page' not in st.session_state:
 if st.session_state['nav_page'] not in PAGES:
     st.session_state['nav_page'] = PAGES[0]
 
-st.markdown(
-    "<span id='ctpm-nav-anchor' style='display:none;height:0;margin:0;padding:0;'></span>"
-    "<script>(function(){"
-    "function tag(){"
-    "var a=document.getElementById('ctpm-nav-anchor');if(!a)return;"
-    "var ec=a.closest('.element-container,.stMarkdown,[class*=element]');if(!ec)return;"
-    "var p=ec.parentNode;if(!p)return;"
-    "var sibs=Array.from(p.children);var idx=sibs.indexOf(ec);"
-    "for(var i=idx+1;i<sibs.length;i++){"
-    "var hb=sibs[i].querySelector('[data-testid=\"stHorizontalBlock\"]');"
-    "if(!hb&&sibs[i].getAttribute('data-testid')==='stHorizontalBlock')hb=sibs[i];"
-    "if(hb){hb.classList.add('ctpm-nav-block');return;}"
-    "}"
-    "}"
-    "new MutationObserver(tag).observe(document.body,{childList:true,subtree:true});"
-    "tag();"
-    "})();</script>",
-    unsafe_allow_html=True
-)
 _nav_cols = st.columns(len(PAGES))
 _nav_clicked = None
 for _i, (_col, _p) in enumerate(zip(_nav_cols, PAGES)):
@@ -2707,6 +2689,24 @@ for _i, (_col, _p) in enumerate(zip(_nav_cols, PAGES)):
         if st.button(_p, key=f"_nav_{_i}", use_container_width=True,
                      type="primary" if _active else "secondary"):
             _nav_clicked = _p
+
+# Inject JS via iframe (window.parent.document) — st.markdown scripts are sandboxed
+_st_components.html("""<script>
+(function(){
+  function tagNav(){
+    try{
+      var doc=window.parent.document;
+      doc.querySelectorAll('[data-testid="stHorizontalBlock"]').forEach(function(hb){
+        if(hb.querySelectorAll('[data-testid="stColumn"]').length>=10){
+          hb.classList.add('ctpm-nav-block');
+        }
+      });
+    }catch(e){}
+  }
+  [50,200,600,1500].forEach(function(t){setTimeout(tagNav,t);});
+  try{new MutationObserver(tagNav).observe(window.parent.document.body,{childList:true,subtree:true});}catch(e){}
+})();
+</script>""", height=0, scrolling=False)
 
 if _nav_clicked and _nav_clicked != st.session_state['nav_page']:
     st.session_state['nav_page'] = _nav_clicked
