@@ -14,8 +14,16 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 from datetime import datetime
+from zoneinfo import ZoneInfo as _ZoneInfo
 
 import importlib
+
+_DISPLAY_TZ = _ZoneInfo("America/New_York")
+
+def _fmt_mtime(mtime: float) -> str:
+    """Convert a file mtime (UTC epoch) to Eastern time for display."""
+    from datetime import timezone
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M %Z")
 
 import pandas as pd
 import numpy as np
@@ -5030,7 +5038,7 @@ elif page == "📤 Upload Data":
                 "Required": "✅ yes" if _req else "optional",
                 "Status": "✅ loaded",
                 "Size (KB)": f"{_s.st_size / 1024:.0f}",
-                "Last updated": datetime.fromtimestamp(_s.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "Last updated": _fmt_mtime(_s.st_mtime),
             })
         else:
             _status_rows.append({
@@ -5137,7 +5145,7 @@ elif page == "📤 Upload Data":
         st.dataframe(
             [{"File": f.name,
               "Size (KB)": f"{f.stat().st_size / 1024:.0f}",
-              "Modified": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")}
+              "Modified": _fmt_mtime(f.stat().st_mtime)}
              for f in _pq_files],
             use_container_width=True, hide_index=True,
         )
