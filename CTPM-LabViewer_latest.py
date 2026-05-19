@@ -696,36 +696,38 @@ def _inject_css(theme: Dict[str,str], kiosk_mode: bool=False):
     .ctpm-nav-block button[data-testid="stBaseButton-primary"],
     .ctpm-nav-block button[data-testid="stBaseButton-secondary"],
     .ctpm-nav-block div[data-testid="stButton"] > button {{
-      background-color: transparent !important;
+      background-color: rgba(0,0,0,0.04) !important;
       background-image: none !important;
-      border: none !important;
-      border-bottom: 3px solid transparent !important;
-      border-radius: 0 !important;
+      border: 1px solid rgba(0,0,0,0.07) !important;
+      border-radius: 6px !important;
       box-shadow: none !important;
+      color: {textc} !important;
       filter: none !important;
       font-size: 0.73rem !important;
       font-weight: 600 !important;
       letter-spacing: 0.1px !important;
-      margin-bottom: -2px !important;
+      margin: 0 2px 4px !important;
       opacity: 1 !important;
-      padding: 7px 8px !important;
+      padding: 6px 8px !important;
       transform: none !important;
-      transition: color 0.15s ease, border-color 0.15s ease !important;
-      width: 100% !important;
+      transition: background-color 0.15s ease, color 0.15s ease !important;
+      width: calc(100% - 4px) !important;
     }}
-    /* Inactive: muted text */
-    .ctpm-nav-block button[data-testid="stBaseButton-secondary"] {{
-      color: {textc}80 !important;
-    }}
+    /* Hover: tint toward primary */
     .ctpm-nav-block button[data-testid="stBaseButton-secondary"]:hover {{
+      background-color: {theme['PRIMARY']}14 !important;
       color: {theme['PRIMARY']} !important;
-      border-bottom-color: {theme['PRIMARY']}55 !important;
     }}
-    /* Active: CTPM red underline */
+    /* Active: solid CTPM red pill, white text */
     .ctpm-nav-block button[data-testid="stBaseButton-primary"] {{
-      color: {theme['PRIMARY']} !important;
-      border-bottom-color: {theme['PRIMARY']} !important;
-      font-weight: 800 !important;
+      background-color: {theme['PRIMARY']} !important;
+      border-color: {theme['PRIMARY']} !important;
+      color: #ffffff !important;
+      font-weight: 700 !important;
+    }}
+    .ctpm-nav-block button[data-testid="stBaseButton-primary"]:hover {{
+      filter: brightness(1.1) !important;
+      transform: none !important;
     }}
 
     {kiosk_css}
