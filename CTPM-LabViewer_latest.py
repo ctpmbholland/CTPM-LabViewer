@@ -2717,6 +2717,45 @@ if _nav_clicked and _nav_clicked != st.session_state['nav_page']:
 
 page = st.session_state['nav_page']
 
+@st.cache_data(show_spinner=False)
+def _shop_cal_tat_trend(events: pd.DataFrame, tat_roll: pd.DataFrame, window_weeks: int = 8) -> pd.DataFrame:
+    """Weekly shop calibration counts + TAT rolling avg aligned on ISO week start."""
+    rows = []
+    if events is not None and not events.empty:
+        e = events.copy()
+        etype = e.get('Event Type', pd.Series(dtype=str)).astype(str).str.lower()
+        e = e[etype.str.contains('calibrat', na=False)].copy()
+        if not e.empty:
+            e['_date'] = pd.to_datetime(e.get('Date'), errors='coerce')
+            e = e.dropna(subset=['_date'])
+            e['week'] = e['_date'].dt.to_period('W').dt.start_time
+            weekly = e.groupby('week').size().rename('cal_count').reset_index()
+            weekly = weekly.sort_values('week').reset_index(drop=True)
+            weekly['cal_rolling'] = weekly['cal_count'].rolling(window_weeks, min_periods=1).mean()
+            rows = weekly
+
+    if tat_roll is not None and not tat_roll.empty:
+        t = tat_roll.copy()
+        t['Ship Day'] = pd.to_datetime(t['Ship Day'], errors='coerce')
+        t = t.dropna(subset=['Ship Day'])
+        t['week'] = t['Ship Day'].dt.to_period('W').dt.start_time
+        wtat = (
+            t.groupby('week')
+             .agg(tat_daily_avg=('daily_avg', 'mean'), tat_count=('tat_count', 'sum'))
+             .reset_index()
+             .sort_values('week')
+        )
+        wtat['tat_rolling'] = wtat['tat_daily_avg'].rolling(window_weeks, min_periods=1).mean()
+        if len(rows):
+            out = pd.DataFrame(rows).merge(wtat, on='week', how='outer').sort_values('week')
+        else:
+            out = wtat
+    else:
+        out = pd.DataFrame(rows) if len(rows) else pd.DataFrame()
+
+    return out.reset_index(drop=True) if not out.empty else pd.DataFrame()
+
+
 # ---- Dashboard ----
 if page=="🏠 Dashboard":
     _enable_ctpm_theme()
@@ -2797,6 +2836,72 @@ if page=="🏠 Dashboard":
                 x=alt.X('Ship Day:T', title='Ship Day'), y=alt.Y('rolling_avg:Q', title='Rolling Avg TAT (days)'),
                 color=alt.value(get_active_theme()['PRIMARY'])
             ).properties(height=280, title='TAT (Shop) — 365d rolling avg').interactive(), )
+
+    # ---- Shop Calibrations vs TAT Trend ----
+    st.markdown("<div class='section-title'>Shop Calibrations vs TAT Trend</div>", unsafe_allow_html=True)
+    _tw_col, _ = st.columns([1, 3])
+    with _tw_col:
+        _trend_window = st.select_slider(
+            "Rolling window", options=[4, 6, 8, 12, 16], value=8,
+            format_func=lambda x: f"{x}-week", key="dash_trend_window"
+        )
+    _trend_df = _shop_cal_tat_trend(events, tat_roll_all, window_weeks=_trend_window)
+
+    if _trend_df.empty or ('cal_rolling' not in _trend_df.columns and 'tat_rolling' not in _trend_df.columns):
+        st.info("Upload Events data to see the calibration vs TAT trend chart.")
+    else:
+        _theme = get_active_theme()
+        _CAL_COLOR  = "#1565C0"   # steel blue — calibration volume
+        _TAT_COLOR  = _theme['PRIMARY']  # CTPM red — TAT
+
+        _base = alt.Chart(_trend_df).encode(
+            x=alt.X('week:T', title='Week', axis=alt.Axis(format='%b %Y', labelAngle=-30))
+        )
+
+        # Left axis: calibration count
+        _cal_area = _base.mark_area(opacity=0.12, color=_CAL_COLOR).encode(
+            y=alt.Y('cal_rolling:Q', title='Shop Calibrations (rolling avg)',
+                    axis=alt.Axis(titleColor=_CAL_COLOR, labelColor=_CAL_COLOR),
+                    scale=alt.Scale(zero=True))
+        )
+        _cal_line = _base.mark_line(strokeWidth=2.5, color=_CAL_COLOR).encode(
+            y=alt.Y('cal_rolling:Q', title='Shop Calibrations (rolling avg)'),
+            tooltip=[
+                alt.Tooltip('week:T', title='Week', format='%b %d %Y'),
+                alt.Tooltip('cal_rolling:Q', title=f'Cals ({_trend_window}-wk avg)', format='.1f'),
+                alt.Tooltip('cal_count:Q', title='Actual cals that week', format='.0f'),
+            ]
+        )
+
+        # Right axis: TAT
+        _tat_line = _base.mark_line(strokeWidth=2.5, strokeDash=[6, 3], color=_TAT_COLOR).encode(
+            y=alt.Y('tat_rolling:Q', title='TAT — days (rolling avg)',
+                    axis=alt.Axis(titleColor=_TAT_COLOR, labelColor=_TAT_COLOR),
+                    scale=alt.Scale(zero=True)),
+            tooltip=[
+                alt.Tooltip('week:T', title='Week', format='%b %d %Y'),
+                alt.Tooltip('tat_rolling:Q', title=f'TAT ({_trend_window}-wk avg, days)', format='.1f'),
+            ]
+        )
+
+        _trend_chart = (
+            alt.layer(_cal_area + _cal_line, _tat_line)
+            .resolve_scale(y='independent')
+            .properties(
+                height=320,
+                title=alt.TitleParams(
+                    text=f'Shop Calibrations (blue) vs TAT in Days (red) — {_trend_window}-week rolling avg',
+                    fontSize=13, anchor='start'
+                )
+            )
+            .interactive()
+        )
+        st.altair_chart(_trend_chart, use_container_width=True)
+        st.caption(
+            "Blue (left axis): number of shop calibrations completed per week, smoothed. "
+            "Red dashed (right axis): average turnaround time in days, smoothed. "
+            "If TAT rises as cals rise → capacity strain. If TAT falls as cals rise → efficiency gain."
+        )
 
 # ---- WIP Tracking ----
 elif page=="📦 WIP Tracking":
