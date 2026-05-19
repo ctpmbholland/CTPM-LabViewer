@@ -691,40 +691,41 @@ def _inject_css(theme: Dict[str,str], kiosk_mode: bool=False):
       flex-shrink: 1 !important;
       flex-grow: 0 !important;
     }}
-    .ctpm-nav-block button {{
-      background: transparent !important;
+    /* Base reset — all nav buttons, all states */
+    .ctpm-nav-block button,
+    .ctpm-nav-block button[data-testid="stBaseButton-primary"],
+    .ctpm-nav-block button[data-testid="stBaseButton-secondary"],
+    .ctpm-nav-block div[data-testid="stButton"] > button {{
+      background-color: transparent !important;
+      background-image: none !important;
       border: none !important;
       border-bottom: 3px solid transparent !important;
       border-radius: 0 !important;
-      color: {textc} !important;
-      opacity: 0.5 !important;
-      font-weight: 600 !important;
-      padding: 7px 8px !important;
-      font-size: 0.73rem !important;
       box-shadow: none !important;
-      width: 100% !important;
-      margin-bottom: -2px !important;
+      filter: none !important;
+      font-size: 0.73rem !important;
+      font-weight: 600 !important;
       letter-spacing: 0.1px !important;
-      transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+      margin-bottom: -2px !important;
+      opacity: 1 !important;
+      padding: 7px 8px !important;
+      transform: none !important;
+      transition: color 0.15s ease, border-color 0.15s ease !important;
+      width: 100% !important;
     }}
-    .ctpm-nav-block button:hover {{
-      opacity: 0.85 !important;
+    /* Inactive: muted text */
+    .ctpm-nav-block button[data-testid="stBaseButton-secondary"] {{
+      color: {textc}80 !important;
+    }}
+    .ctpm-nav-block button[data-testid="stBaseButton-secondary"]:hover {{
       color: {theme['PRIMARY']} !important;
       border-bottom-color: {theme['PRIMARY']}55 !important;
-      transform: none !important;
-      box-shadow: none !important;
     }}
+    /* Active: CTPM red underline */
     .ctpm-nav-block button[data-testid="stBaseButton-primary"] {{
       color: {theme['PRIMARY']} !important;
-      opacity: 1 !important;
-      border-bottom: 3px solid {theme['PRIMARY']} !important;
+      border-bottom-color: {theme['PRIMARY']} !important;
       font-weight: 800 !important;
-      background: transparent !important;
-      box-shadow: none !important;
-    }}
-    .ctpm-nav-block button[data-testid="stBaseButton-primary"]:hover {{
-      transform: none !important;
-      filter: none !important;
     }}
 
     {kiosk_css}
