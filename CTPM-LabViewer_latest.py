@@ -28,7 +28,6 @@ def _fmt_mtime(mtime: float) -> str:
 import pandas as pd
 import numpy as np
 import streamlit as st
-import streamlit.components.v1 as _st_components
 
 
 class _Lazy:
@@ -686,55 +685,60 @@ def _inject_css(theme: Dict[str,str], kiosk_mode: bool=False):
       gap: 12px;
     }}
 
-    /* ── Nav strip (JS adds .ctpm-nav-block to the stHorizontalBlock) ── */
-    .ctpm-nav-block {{
-      border-bottom: 2px solid {border} !important;
-      padding-bottom: 0 !important;
+    /* ── Notebook tab nav — targets the stHorizontalBlock that has ≥10 columns ── */
+    /* No JS needed: CSS :has() identifies the nav block by column count          */
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) {{
+      border-bottom: 2px solid {theme['PRIMARY']} !important;
+      align-items: flex-end !important;
       column-gap: 0 !important;
-      margin-bottom: 12px !important;
+      margin-bottom: 14px !important;
+      padding: 0 !important;
     }}
-    .ctpm-nav-block > div[data-testid="stColumn"] {{
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) >[data-testid="stColumn"] {{
+      flex: 1 1 0 !important;
       padding: 0 2px !important;
       min-width: 0 !important;
-      flex-shrink: 1 !important;
-      flex-grow: 0 !important;
     }}
-    /* Base reset — all nav buttons, all states */
-    .ctpm-nav-block button,
-    .ctpm-nav-block button[data-testid="stBaseButton-primary"],
-    .ctpm-nav-block button[data-testid="stBaseButton-secondary"],
-    .ctpm-nav-block div[data-testid="stButton"] > button {{
+    /* All nav buttons — base inactive tab */
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button,
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button[data-testid="stBaseButton-primary"],
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button[data-testid="stBaseButton-secondary"] {{
       background-color: rgba(0,0,0,0.04) !important;
       background-image: none !important;
-      border: 1px solid rgba(0,0,0,0.07) !important;
-      border-radius: 6px !important;
+      border: 1px solid rgba(0,0,0,0.15) !important;
+      border-bottom: 2px solid transparent !important;
+      border-radius: 6px 6px 0 0 !important;
+      bottom: -2px !important;
       box-shadow: none !important;
       color: {textc} !important;
       filter: none !important;
-      font-size: 0.73rem !important;
+      font-size: 0.70rem !important;
       font-weight: 600 !important;
-      letter-spacing: 0.1px !important;
-      margin: 0 2px 4px !important;
       opacity: 1 !important;
       padding: 6px 8px !important;
+      position: relative !important;
       transform: none !important;
       transition: background-color 0.15s ease, color 0.15s ease !important;
-      width: calc(100% - 4px) !important;
+      width: 100% !important;
     }}
-    /* Hover: tint toward primary */
-    .ctpm-nav-block button[data-testid="stBaseButton-secondary"]:hover {{
+    /* Hover */
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button[data-testid="stBaseButton-secondary"]:hover {{
       background-color: {theme['PRIMARY']}14 !important;
       color: {theme['PRIMARY']} !important;
+      border-color: {theme['PRIMARY']}60 !important;
     }}
-    /* Active: solid CTPM red pill, white text */
-    .ctpm-nav-block button[data-testid="stBaseButton-primary"] {{
-      background-color: {theme['PRIMARY']} !important;
+    /* Active tab: CTPM red border on top/sides, bg color on bottom = "open" effect */
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button[data-testid="stBaseButton-primary"] {{
+      background-color: {bg} !important;
+      background-image: none !important;
       border-color: {theme['PRIMARY']} !important;
-      color: #ffffff !important;
-      font-weight: 700 !important;
+      border-bottom-color: {bg} !important;
+      color: {theme['PRIMARY']} !important;
+      font-weight: 800 !important;
+      z-index: 2 !important;
     }}
-    .ctpm-nav-block button[data-testid="stBaseButton-primary"]:hover {{
-      filter: brightness(1.1) !important;
+    [data-testid="stHorizontalBlock"]:has(>[data-testid="stColumn"]:nth-child(10)) button[data-testid="stBaseButton-primary"]:hover {{
+      filter: none !important;
       transform: none !important;
     }}
 
@@ -2701,23 +2705,6 @@ for _i, (_col, _p) in enumerate(zip(_nav_cols, PAGES)):
                      type="primary" if _active else "secondary"):
             _nav_clicked = _p
 
-# Inject JS via iframe (window.parent.document) — st.markdown scripts are sandboxed
-_st_components.html("""<script>
-(function(){
-  function tagNav(){
-    try{
-      var doc=window.parent.document;
-      doc.querySelectorAll('[data-testid="stHorizontalBlock"]').forEach(function(hb){
-        if(hb.querySelectorAll('[data-testid="stColumn"]').length>=10){
-          hb.classList.add('ctpm-nav-block');
-        }
-      });
-    }catch(e){}
-  }
-  [50,200,600,1500].forEach(function(t){setTimeout(tagNav,t);});
-  try{new MutationObserver(tagNav).observe(window.parent.document.body,{childList:true,subtree:true});}catch(e){}
-})();
-</script>""", height=0, scrolling=False)
 
 if _nav_clicked and _nav_clicked != st.session_state['nav_page']:
     st.session_state['nav_page'] = _nav_clicked
