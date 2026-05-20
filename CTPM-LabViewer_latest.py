@@ -5034,10 +5034,16 @@ elif page == "📋 Weekly Report":
                         _wr_gen_warnings.append("Could not compute cal projection from Events data — projection will be 0.")
 
                     # TAT: derived from wc_all (same data as TAT Live View tab)
-                    # CTPM excluded via charts_df; completed cycles only; medians to match live view
+                    # CTPM excluded via charts_df; last 90 days of completed cycles; medians
                     tat_from_file = None
                     try:
-                        _wc_rpt = charts_df(wc_all[~wc_all['In_Shop'].fillna(False)].copy())
+                        _wc_rpt_cutoff = pd.Timestamp.today().normalize() - pd.DateOffset(days=90)
+                        _wc_rpt_done = wc_all[~wc_all['In_Shop'].fillna(False)].copy()
+                        if 'Recv' in _wc_rpt_done.columns:
+                            _wc_rpt_ship_est = pd.to_datetime(_wc_rpt_done['Recv'], errors='coerce') + pd.to_timedelta(
+                                pd.to_numeric(_wc_rpt_done['Days_Total_R2Ship'], errors='coerce').fillna(0), unit='D')
+                            _wc_rpt_done = _wc_rpt_done[_wc_rpt_ship_est >= _wc_rpt_cutoff]
+                        _wc_rpt = charts_df(_wc_rpt_done)
                         if _wc_rpt is not None and not _wc_rpt.empty:
                             def _rpt_med(col):
                                 s_ = pd.to_numeric(_wc_rpt[col], errors='coerce').dropna()
