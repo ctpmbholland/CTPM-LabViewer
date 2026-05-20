@@ -2177,10 +2177,21 @@ def wip_chain(path: str, sig: Tuple[float,int], equip: pd.DataFrame) -> pd.DataF
     out = out.merge(first_cal, on=['Work Order','I.D.'], how='left')
     out = out.merge(first_qc, on=['Work Order','I.D.'], how='left')
     out = out.merge(last_ship, on=['Work Order','I.D.'], how='left')
-    out['Days_R2Cal'] = (out['Cal_ts'] - out['Recv']).dt.total_seconds() / 86400
-    out['Days_Cal2QC'] = (out['QC_ts'] - out['Cal_ts']).dt.total_seconds() / 86400
-    out['Days_QC2Ship'] = (out['Ship_ts'] - out['QC_ts']).dt.total_seconds() / 86400
-    out['Days_Total_R2Ship'] = (out['Ship_ts'] - out['Recv']).dt.total_seconds() / 86400
+    def _bd_col(s_ser, e_ser):
+        vals = []
+        for s_, e_ in zip(s_ser, e_ser):
+            try:
+                if pd.isna(s_) or pd.isna(e_):
+                    vals.append(np.nan)
+                else:
+                    vals.append(float(np.busday_count(pd.Timestamp(s_).date(), pd.Timestamp(e_).date())))
+            except Exception:
+                vals.append(np.nan)
+        return vals
+    out['Days_R2Cal']       = _bd_col(out['Recv'],    out['Cal_ts'])
+    out['Days_Cal2QC']      = _bd_col(out['Cal_ts'],  out['QC_ts'])
+    out['Days_QC2Ship']     = _bd_col(out['QC_ts'],   out['Ship_ts'])
+    out['Days_Total_R2Ship']= _bd_col(out['Recv'],    out['Ship_ts'])
 
     # TAT sanity: negative durations imply ship-before-receive or timestamp issues
     dur_cols = ['Days_R2Cal','Days_Cal2QC','Days_QC2Ship','Days_Total_R2Ship']
@@ -2456,6 +2467,8 @@ def rolling_tat_365d_from_file(path: str, sig: Tuple[float,int], window_days: in
     if e.empty: return pd.DataFrame(columns=["Ship Day","daily_avg","tat_count","rolling_avg","rolling_count"])
     # Infer simple TAT: receiving -> shipping per (WO, I.D.)
     e2 = e.copy()
+    if 'Company' in e2.columns:
+        e2 = e2[e2['Company'].astype(str).str.strip().str.upper().ne('CTPM')]
     def stage_tag(s: str):
         s = str(s)
         if 'receiv' in s: return 'receiving'
@@ -5020,16 +5033,29 @@ elif page == "📋 Weekly Report":
                     if cal_data is None or cal_data.get("monthly_average", 0) == 0:
                         _wr_gen_warnings.append("Could not compute cal projection from Events data — projection will be 0.")
 
+                    # TAT: derived from wc_all (same data as TAT Live View tab)
+                    # CTPM excluded via charts_df; completed cycles only; medians to match live view
                     tat_from_file = None
-                    if events is not None and not events.empty:
-                        try:
-                            tat_from_file = _wr_tat_from_events_df(events)
-                            if tat_from_file.get("sample_size", 0) < 10:
-                                _wr_gen_warnings.append(f"TAT based on only {tat_from_file.get('sample_size', 0)} completed instruments — low sample size.")
-                        except Exception as _tat_e:
-                            _wr_gen_warnings.append(f"TAT compute error: {_tat_e}")
-                    else:
-                        _wr_gen_warnings.append("Events data not loaded — TAT will use manual inputs only.")
+                    try:
+                        _wc_rpt = charts_df(wc_all[~wc_all['In_Shop'].fillna(False)].copy())
+                        if _wc_rpt is not None and not _wc_rpt.empty:
+                            def _rpt_med(col):
+                                s_ = pd.to_numeric(_wc_rpt[col], errors='coerce').dropna()
+                                return round(float(s_.median()), 1) if len(s_) > 0 else 0.0
+                            _rpt_n = int(_wc_rpt['Days_Total_R2Ship'].notna().sum())
+                            tat_from_file = {
+                                "receive_to_cal": _rpt_med('Days_R2Cal'),
+                                "cal_to_qc":      _rpt_med('Days_Cal2QC'),
+                                "qc_to_ship":     _rpt_med('Days_QC2Ship'),
+                                "total":          _rpt_med('Days_Total_R2Ship'),
+                                "sample_size":    _rpt_n,
+                            }
+                            if _rpt_n < 10:
+                                _wr_gen_warnings.append(f"TAT based on only {_rpt_n} completed instruments — low sample size.")
+                        else:
+                            _wr_gen_warnings.append("No completed shop cycles found — TAT will use manual inputs only.")
+                    except Exception as _tat_e:
+                        _wr_gen_warnings.append(f"TAT compute error: {_tat_e}")
 
                     def _wr_tat_val(manual_val, file_key):
                         if manual_val and float(manual_val) > 0:
