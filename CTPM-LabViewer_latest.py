@@ -489,6 +489,16 @@ def _inject_css(theme: Dict[str,str], kiosk_mode: bool=False):
       line-height: 1.2;
     }}
 
+    /* Alert / notification boxes — force readable text regardless of theme */
+    [data-testid="stAlert"] {{
+      color: #111318 !important;
+    }}
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div,
+    [data-testid="stAlert"] span {{
+      color: #111318 !important;
+    }}
+
     /* Dataframe/table container */
     .stDataFrame, .stTable {{
       border-radius: var(--ctpm-radius-md) !important;
