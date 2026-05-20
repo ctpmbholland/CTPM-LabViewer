@@ -5112,14 +5112,15 @@ elif page == "📤 Upload Data":
                 _any_saved = True
 
     if _any_saved:
-        # Old Parquet files are auto-ignored by the per-file sig hash naming;
-        # no need to delete them. Just clear in-memory cache so next load
-        # uses the freshly-written Parquet instead of cached stale data.
-        st.cache_data.clear()
+        # Drop only the computed-view cache keys so the next page load
+        # re-derives from the freshly written Parquet files.
+        # Do NOT call st.cache_data.clear() + st.rerun() — that forces an
+        # immediate full data reload while upload buffers are still in memory,
+        # causing an OOM crash on Railway.
         for _k in ("__aging__", "__wip__", "__tatroll__"):
             st.session_state.pop(_k, None)
-        st.info("Files cached as Parquet. Navigate to **🏠 Dashboard** to load your data.")
-        st.rerun()
+        st.cache_data.clear()
+        st.success("✅ Files saved and cached. Click **🏠 Dashboard** in the nav to load your data.")
 
     st.divider()
 
