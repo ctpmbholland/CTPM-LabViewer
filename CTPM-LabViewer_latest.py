@@ -2421,8 +2421,19 @@ def compute_aging_from_file(path: str, sig: Tuple[float,int]) -> pd.DataFrame:
         out["Equipment Tracking Status"] = out.get("Latest Tracking Status", pd.NA)
     today = pd.Timestamp.today().normalize(); out["days_open"] = pd.NA; out["days_to_complete"] = pd.NA
     if "Open Date" in out.columns:
-        mask_open = out["Open Date"].notna() & (out["Completed Date"].isna()); out.loc[mask_open, "days_open"] = (today - pd.to_datetime(out.loc[mask_open, "Open Date"]).dt.normalize()).dt.days
-        mask_done = out["Open Date"].notna() & (out["Completed Date"].notna()); out.loc[mask_done, "days_to_complete"] = (pd.to_datetime(out.loc[mask_done, "Completed Date"]).dt.normalize() - pd.to_datetime(out.loc[mask_done, "Open Date"]).dt.normalize()).dt.days
+        mask_open = out["Open Date"].notna() & (out["Completed Date"].isna())
+        out.loc[mask_open, "days_open"] = [
+            int(np.busday_count(o.date(), today.date()))
+            for o in pd.to_datetime(out.loc[mask_open, "Open Date"]).dt.normalize()
+        ]
+        mask_done = out["Open Date"].notna() & (out["Completed Date"].notna())
+        out.loc[mask_done, "days_to_complete"] = [
+            int(np.busday_count(o.date(), c.date()))
+            for o, c in zip(
+                pd.to_datetime(out.loc[mask_done, "Open Date"]).dt.normalize(),
+                pd.to_datetime(out.loc[mask_done, "Completed Date"]).dt.normalize(),
+            )
+        ]
     keep = ["Work Order","I.D.","Company","Open Date","Due Date","Completed Date","Status","Sub-Status","Equipment Tracking Status","days_open","days_to_complete"]
     for k in keep:
         if k not in out.columns: out[k] = pd.NA
@@ -2447,7 +2458,7 @@ def rolling_tat_365d_from_file(path: str, sig: Tuple[float,int], window_days: in
         s = g.loc[g['Stage']=='shipping','event_ts']
         if r.empty or s.empty: continue
         r = r.min(); s = s.max()
-        _dd = (s - r).days
+        _dd = int(np.busday_count(r.date(), s.date()))
         if _dd >= 0:
             xrows.append({'Ship Day': s.normalize(), 'd_total_tat': _dd})
     x = pd.DataFrame(xrows)
@@ -4683,6 +4694,133 @@ elif page == "📋 Weekly Report":
         st.error(f"Weekly Report utils not found. Make sure CTPM-Weekly-Report/ is in the same folder as this app. ({_wr_import_err})")
 
     if _wr_available:
+        # ── Helpers: derive cal + TAT from already-loaded events DataFrame ──
+        def _wr_col(df, candidates):
+            cols_upper = {c.upper(): c for c in df.columns}
+            for c in candidates:
+                if c.upper() in cols_upper:
+                    return cols_upper[c.upper()]
+            return None
+
+        _WR_STAGE_NAMES = ["Receiving In-Shop", "Shop Calibration", "Qc", "Shipping"]
+        _WR_STAGE_ALIASES = {
+            "Receiving In-Shop": ["receiving in-shop", "receive in shop", "receiving", "in-shop receive", "shop receive"],
+            "Shop Calibration": ["shop calibration", "shop cal", "calibration", "cal",
+                                 "pipette cal in-shop", "pippette cal in-shop", "cover letter cal cert"],
+            "Qc": ["qc", "quality control", "quality check", "q.c."],
+            "Shipping": ["shipping", "ship", "shipped", "shipment"],
+        }
+        _WR_CAL_TYPES = {"shop calibration", "shop cal", "calibration", "cal",
+                         "pipette cal in-shop", "pippette cal in-shop", "cover letter cal cert"}
+
+        def _wr_norm_stage(raw: str):
+            rl = raw.lower().strip()
+            for canon, aliases in _WR_STAGE_ALIASES.items():
+                if rl == canon.lower() or rl in aliases:
+                    return canon
+            if "cal" in rl and "ship" not in rl and "receiv" not in rl:
+                return "Shop Calibration"
+            return None
+
+        def _wr_cal_from_events_df(df: pd.DataFrame) -> dict:
+            from datetime import date as _d
+            sc   = _wr_col(df, ["Status", "Cal Status", "Calibration Status"])
+            dc   = _wr_col(df, ["Event Date (Universal)", "Calibration Date", "Date", "Completed Date"])
+            etc  = _wr_col(df, ["Event Type", "Stage", "Activity"])
+            if not all([sc, dc, etc]):
+                return {"monthly_average": 0, "months_used": 0, "monthly_detail": {}}
+            _mask = (df[sc].astype(str).str.strip().str.lower() == "complete") & \
+                    (df[etc].astype(str).str.strip().str.lower().isin(_WR_CAL_TYPES))
+            _dfc = df[_mask].copy()
+            _dfc["_date"] = pd.to_datetime(_dfc[dc], errors="coerce")
+            _dfc = _dfc.dropna(subset=["_date"])
+            _dfc["_month"] = _dfc["_date"].dt.to_period("M")
+            mc = _dfc.groupby("_month").size()
+            if mc.empty:
+                return {"monthly_average": 0, "months_used": 0, "monthly_detail": {}}
+            cur = pd.Timestamp(_d.today()).to_period("M")
+            past = mc[mc.index < cur].sort_index()
+            recent = past.tail(6)
+            avg = float(recent.mean()) if len(recent) > 0 else float(mc.mean())
+            return {"monthly_average": round(avg), "months_used": len(recent),
+                    "monthly_detail": {str(k): int(v) for k, v in recent.items()}}
+
+        def _wr_tat_from_events_df(df: pd.DataFrame) -> dict:
+            import numpy as _np2
+            from datetime import date as _d, timedelta as _td
+            wo_col2    = _wr_col(df, ["Work Order", "WO", "WO Number"])
+            id_col2    = _wr_col(df, ["I.D.", "ID", "Item ID", "Instrument ID"])
+            stage_col2 = _wr_col(df, ["Event Type", "Stage", "Event", "Event Name"])
+            date_col2  = _wr_col(df, ["Event Date (Universal)", "Date", "Event Date", "Completed Date"])
+            if not all([wo_col2, id_col2, stage_col2, date_col2]):
+                return {"receive_to_cal": 0.0, "cal_to_qc": 0.0, "qc_to_ship": 0.0, "total": 0.0, "sample_size": 0}
+            _dft = df.copy()
+            _dft["_date"] = pd.to_datetime(_dft[date_col2], errors="coerce")
+            _dft = _dft.dropna(subset=["_date"])
+            _dft["_stage"] = _dft[stage_col2].astype(str).str.strip().apply(_wr_norm_stage)
+            _dft = _dft[_dft["_stage"].notna()].copy()
+            cutoff = pd.Timestamp(_d.today() - _td(days=90))
+            _dft["_key"] = _dft[wo_col2].astype(str) + "||" + _dft[id_col2].astype(str)
+            records = []
+            for _, grp in _dft.groupby("_key"):
+                sd = {}
+                for _, row in grp.iterrows():
+                    s = row["_stage"]
+                    if s not in sd or row["_date"] < sd[s]:
+                        sd[s] = row["_date"]
+                if not all(s in sd for s in _WR_STAGE_NAMES):
+                    continue
+                if sd["Shipping"] < cutoff:
+                    continue
+                records.append({"receive": sd["Receiving In-Shop"], "cal": sd["Shop Calibration"],
+                                "qc": sd["Qc"], "ship": sd["Shipping"]})
+            if not records:
+                return {"receive_to_cal": 0.0, "cal_to_qc": 0.0, "qc_to_ship": 0.0, "total": 0.0, "sample_size": 0}
+            def _bd(ss, es):
+                vals = []
+                for s, e in zip(ss, es):
+                    try: vals.append(max(int(_np2.busday_count(s.date(), e.date())), 0))
+                    except Exception: pass
+                return float(_np2.mean(vals)) if vals else 0.0
+            _dfr = pd.DataFrame(records)
+            r2c = _bd(_dfr["receive"], _dfr["cal"])
+            c2q = _bd(_dfr["cal"], _dfr["qc"])
+            q2s = _bd(_dfr["qc"], _dfr["ship"])
+            return {"receive_to_cal": round(r2c, 1), "cal_to_qc": round(c2q, 1),
+                    "qc_to_ship": round(q2s, 1), "total": round(r2c + c2q + q2s, 1),
+                    "sample_size": len(records)}
+
+        def _wr_parse_wip_df(df: pd.DataFrame, lookup) -> dict:
+            idc  = _wr_col(df, ["I.D.", "ID", "Item ID", "Instrument ID", "ItemID", "Cal ID"])
+            comc = _wr_col(df, ["Company", "Customer", "Client", "Company Name"])
+            typc = _wr_col(df, ["Type", "Instrument Type", "Cal Type"])
+            woc  = _wr_col(df, ["Work Order", "WO", "WO Number", "WorkOrder"])
+            mfrc = _wr_col(df, ["Manufacturer", "Mfr", "Make"])
+            modc = _wr_col(df, ["Model Number", "Model No", "Model", "ModelNumber"])
+            if idc is None:
+                raise ValueError("WIP data: cannot find an I.D. column.")
+            tier_counts = {"id": 0, "mfr_model": 0, "type": 0, "unmatched": 0}
+            total_value = 0.0
+            items = []
+            for _, row in df.iterrows():
+                iid   = str(row[idc]).strip() if pd.notna(row.get(idc)) else ""
+                mfr   = str(row[mfrc]).strip() if mfrc and pd.notna(row.get(mfrc)) else ""
+                model = str(row[modc]).strip() if modc and pd.notna(row.get(modc)) else ""
+                itype = str(row[typc]).strip() if typc and pd.notna(row.get(typc)) else ""
+                wo    = str(row[woc]).strip() if woc and pd.notna(row.get(woc)) else ""
+                if not iid or iid.lower() in ("nan", "none", ""):
+                    continue
+                cost, tier = lookup.lookup(iid, mfr or None, model or None, itype or None)
+                tier_counts[tier] += 1
+                if cost:
+                    total_value += cost
+                items.append({"id": iid,
+                              "company": str(row[comc]).strip() if comc and pd.notna(row.get(comc)) else "",
+                              "type": itype, "wo": wo, "cost": cost or 0.0, "tier": tier})
+            unique_wos = len({i["wo"] for i in items if i["wo"] and i["wo"].lower() not in ("nan", "none", "")})
+            return {"item_count": len(items), "wo_count": unique_wos, "total_value": total_value,
+                    "unmatched_count": tier_counts["unmatched"], "pricing_confidence": tier_counts, "items": items}
+
         tab_tat, tab_gen = st.tabs(["📊 TAT Live View", "📄 Report Generator"])
 
         # ── Tab 1: TAT live view ──────────────────────────────────────────────
@@ -4737,14 +4875,26 @@ elif page == "📋 Weekly Report":
             # File uploads
             with st.expander("📂 Data Files", expanded=True):
                 _fc1, _fc2 = st.columns(2)
+                _wr_wip_has_loaded = wip_shop_df is not None and not wip_shop_df.empty
+                _wr_events_loaded  = events is not None and not events.empty
                 with _fc1:
-                    _wr_field_est   = st.file_uploader("Field Estimates *(required)*",                    type=["xlsx","xls"], key="wr_field_est")
-                    _wr_wip         = st.file_uploader("Current WIP *(required for WIP pricing)*",        type=["xls","xlsx"], key="wr_wip")
-                    _wr_cal_events  = st.file_uploader("Shop Cal Events *(required for cal projection)*", type=["xlsx","xls"], key="wr_cal_events")
+                    _wr_field_est = st.file_uploader("Field Estimates *(required)*", type=["xlsx","xls"], key="wr_field_est")
+                    if _wr_wip_has_loaded:
+                        st.info("WIP Shop: using recently uploaded file. Upload below to override.")
+                    _wr_wip = st.file_uploader(
+                        "Current WIP *(override — already loaded)*" if _wr_wip_has_loaded else "Current WIP *(required for WIP pricing)*",
+                        type=["xls","xlsx"], key="wr_wip")
+                    if _wr_events_loaded:
+                        st.info("Shop Cal Events: derived automatically from loaded Events data.")
+                    else:
+                        st.warning("Events file not loaded — shop calibration projection unavailable.")
                 with _fc2:
-                    _wr_shop_est    = st.file_uploader("Shop Estimates *(optional)*",                     type=["xlsx","xls"], key="wr_shop_est")
-                    _wr_historic    = st.file_uploader("Historic Calibrations *(required for WIP pricing)*", type=["xlsx","xls"], key="wr_historic")
-                    _wr_events      = st.file_uploader("Events *(required for TAT)*",                     type=["xlsx","xls"], key="wr_events")
+                    _wr_shop_est = st.file_uploader("Shop Estimates *(optional)*", type=["xlsx","xls"], key="wr_shop_est")
+                    _wr_historic = st.file_uploader("Historic Calibrations *(required for WIP pricing)*", type=["xlsx","xls"], key="wr_historic")
+                    if _wr_events_loaded:
+                        st.info("TAT: derived automatically from loaded Events data.")
+                    else:
+                        st.warning("Events file not loaded — TAT will use manual inputs only.")
 
             # Report period
             with st.expander("📅 Report Period", expanded=True):
@@ -4809,12 +4959,10 @@ elif page == "📋 Weekly Report":
                         return _p
 
                     _paths = {
-                        "field_estimates":      _wr_save(_wr_field_est,  "field_estimates"),
-                        "shop_estimates":        _wr_save(_wr_shop_est,   "shop_estimates"),
-                        "current_wip":           _wr_save(_wr_wip,        "current_wip"),
-                        "historic_calibrations": _wr_save(_wr_historic,   "historic_calibrations"),
-                        "shop_cal_events":       _wr_save(_wr_cal_events, "shop_cal_events"),
-                        "events":                _wr_save(_wr_events,     "events"),
+                        "field_estimates":      _wr_save(_wr_field_est, "field_estimates"),
+                        "shop_estimates":        _wr_save(_wr_shop_est,  "shop_estimates"),
+                        "current_wip":           _wr_save(_wr_wip,       "current_wip"),
+                        "historic_calibrations": _wr_save(_wr_historic,  "historic_calibrations"),
                     }
 
                     # Parse files
@@ -4835,32 +4983,43 @@ elif page == "📋 Weekly Report":
                         _wr_gen_warnings.append("Historic Calibrations not uploaded — WIP cost estimates unavailable.")
 
                     wip_data = None
+                    _wip_source_df = None
                     if _paths["current_wip"]:
+                        # Explicit upload overrides auto-loaded data
                         if historic_lookup is None:
                             _wr_gen_warnings.append("WIP uploaded but Historic Calibrations missing — cannot estimate WIP value.")
                         else:
                             wip_data = _wr_parse_wip(_paths["current_wip"], historic_lookup)
-                            if wip_data["pricing_confidence"].get("unmatched", 0) > 0:
-                                _wr_gen_warnings.append(f"{wip_data['pricing_confidence']['unmatched']} WIP item(s) have no price estimate.")
+                    elif wip_shop_df is not None and not wip_shop_df.empty:
+                        # Use the already-loaded WIP Shop file
+                        if historic_lookup is None:
+                            _wr_gen_warnings.append("Historic Calibrations not uploaded — cannot estimate WIP value from loaded WIP data.")
+                        else:
+                            wip_data = _wr_parse_wip_df(wip_shop_df, historic_lookup)
                     else:
-                        _wr_gen_warnings.append("Current WIP not uploaded — WIP value will be $0.")
+                        _wr_gen_warnings.append("No WIP data available — WIP value will be $0.")
+                    if wip_data and wip_data["pricing_confidence"].get("unmatched", 0) > 0:
+                        _wr_gen_warnings.append(f"{wip_data['pricing_confidence']['unmatched']} WIP item(s) have no price estimate.")
 
                     cal_data = None
-                    if _paths["shop_cal_events"]:
-                        cal_data = _wr_parse_cal_events(_paths["shop_cal_events"])
-                    else:
-                        _wr_gen_warnings.append("Shop Cal Events not uploaded — calibration projection unavailable.")
+                    if events is not None and not events.empty:
+                        try:
+                            cal_data = _wr_cal_from_events_df(events)
+                        except Exception as _cal_e:
+                            _wr_gen_warnings.append(f"Cal projection error: {_cal_e}")
+                    if cal_data is None or cal_data.get("monthly_average", 0) == 0:
+                        _wr_gen_warnings.append("Could not compute cal projection from Events data — projection will be 0.")
 
                     tat_from_file = None
-                    if _paths["events"]:
+                    if events is not None and not events.empty:
                         try:
-                            tat_from_file = _wr_parse_events_tat(_paths["events"])
+                            tat_from_file = _wr_tat_from_events_df(events)
                             if tat_from_file.get("sample_size", 0) < 10:
-                                _wr_gen_warnings.append(f"TAT based on only {tat_from_file.get('sample_size',0)} instruments — low sample size.")
+                                _wr_gen_warnings.append(f"TAT based on only {tat_from_file.get('sample_size', 0)} completed instruments — low sample size.")
                         except Exception as _tat_e:
-                            _wr_gen_warnings.append(f"TAT parse error: {_tat_e}")
+                            _wr_gen_warnings.append(f"TAT compute error: {_tat_e}")
                     else:
-                        _wr_gen_warnings.append("Events file not uploaded — TAT will use manual inputs only.")
+                        _wr_gen_warnings.append("Events data not loaded — TAT will use manual inputs only.")
 
                     def _wr_tat_val(manual_val, file_key):
                         if manual_val and float(manual_val) > 0:
