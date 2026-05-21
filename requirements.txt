@@ -18,6 +18,7 @@ MarkupSafe==3.0.3
 narwhals==2.16.0
 numpy==2.4.2
 openpyxl==3.1.5
+python-calamine
 packaging==26.0
 pandas==2.3.3
 pgeocode==0.5.0
