@@ -5276,53 +5276,23 @@ elif page == "📤 Upload Data":
             if _already_done:
                 st.info(f"✅ {_label} already loaded — no change detected.")
             else:
-                with st.status(f"Processing {_label}...", expanded=True) as _st_status:
-                    for _old_ext in (".xlsx", ".xls"):
-                        _old = _upl_dir / f"{_key}{_old_ext}"
-                        if _old.exists() and _old != _dest:
-                            try: _old.unlink()
-                            except Exception: pass
+                for _old_ext in (".xlsx", ".xls"):
+                    _old = _upl_dir / f"{_key}{_old_ext}"
+                    if _old.exists() and _old != _dest:
+                        try: _old.unlink()
+                        except Exception: pass
 
-                    st.write("Saving file...")
-                    _buf = BytesIO(_uf.read())
-                    with open(_dest, "wb") as _fh:
-                        _fh.write(_buf.getvalue())
-
-                    # Write Parquet — read Excel once, filter cols, write Parquet
-                    # Use calamine engine (Rust-based, 10-100x faster than openpyxl)
-                    # then fall back to openpyxl if unavailable
-                    if _pq_name is not None:
-                        st.write("Converting to fast cache format...")
-                        _s = _dest.stat()
-                        _file_hash = _sig_hash((float(_s.st_mtime), int(_s.st_size)))
-                        _pq_dest = PARQUET_DIR / f"{_pq_name}_{_file_hash}.parquet"
-                        try:
-                            _buf.seek(0)
-                            if _ext == ".xls":
-                                _engine = "xlrd"
-                            else:
-                                try:
-                                    import python_calamine  # noqa: F401
-                                    _engine = "calamine"
-                                except ImportError:
-                                    _engine = "openpyxl"
-                            # Read once — filter cols from the loaded DataFrame
-                            _df = pd.read_excel(_buf, engine=_engine)
-                            if _keep:
-                                _cols = [c for c in _keep if c in _df.columns]
-                                if _cols:
-                                    _df = _df[_cols]
-                            _df.to_parquet(_pq_dest, index=False)
-                            del _df
-                        except Exception:
-                            pass  # non-fatal; loader will read Excel on next load
-
-                    st.write("Backing up to cloud...")
-                    _s3_upload(_dest)
-
-                    del _buf
-                    _gc.collect()
-                    _st_status.update(label=f"✅ {_label} saved ({_dest.stat().st_size / 1024:.0f} KB)", state="complete")
+                # Write raw file to disk and back up to S3 immediately.
+                # Parquet conversion is intentionally skipped here — load_clean_data
+                # builds it lazily on first Dashboard access, which happens in the
+                # background after the user navigates away. This keeps uploads fast.
+                _buf = BytesIO(_uf.read())
+                with open(_dest, "wb") as _fh:
+                    _fh.write(_buf.getvalue())
+                _s3_upload(_dest)
+                del _buf
+                _gc.collect()
+                st.success(f"✅ {_label} saved ({_dest.stat().st_size / 1024:.0f} KB). Navigate to Dashboard to load.")
                 _any_saved = True
 
     if _any_saved:
