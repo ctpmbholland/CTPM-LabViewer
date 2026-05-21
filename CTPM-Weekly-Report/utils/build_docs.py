@@ -185,11 +185,6 @@ def _add_ctpm_header(doc, title: str, subtitle: str = ""):
     run.bold = True
     run.font.color.rgb = MAROON
 
-    run2 = para.add_run("  |  Calibration, Test & Process Management")
-    run2.font.name = FONT_HEADING
-    run2.font.size = Pt(11)
-    run2.font.color.rgb = DARK_GRAY
-
     # Divider
     p_div = doc.add_paragraph()
     p_div.paragraph_format.space_before = Pt(0)
@@ -510,13 +505,23 @@ def build_weekly_update(path: str, report_date: datetime, revenue: dict,
     # ── Customer Wins / Losses ──
     _add_heading(doc, "Customer Wins / Losses", level=2)
     wins = manual_inputs.get("customer_wins_losses", "").strip()
-    _add_body_para(doc, wins if wins else "(No entries.)")
+    wins_lines = [l.strip() for l in wins.splitlines() if l.strip()] if wins else []
+    if wins_lines:
+        for line in wins_lines:
+            _add_bullet(doc, line)
+    else:
+        _add_body_para(doc, "(No entries.)")
     doc.add_paragraph()
 
     # ── Upcoming Week Focus ──
     _add_heading(doc, "Upcoming Week Focus", level=2)
     focus = manual_inputs.get("upcoming_focus", "").strip()
-    _add_body_para(doc, focus if focus else "(No entries.)")
+    focus_lines = [l.strip() for l in focus.splitlines() if l.strip()] if focus else []
+    if focus_lines:
+        for line in focus_lines:
+            _add_bullet(doc, line)
+    else:
+        _add_body_para(doc, "(No entries.)")
 
     doc.save(path)
 
