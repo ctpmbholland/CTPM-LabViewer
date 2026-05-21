@@ -1279,6 +1279,7 @@ def require_auth(allowed_roles: List[str] | None = None):
         st.stop()
 
 # ================= SETTINGS =================
+@st.cache_data(ttl=300, show_spinner=False)
 def load_settings() -> Dict:
     if SETTINGS_FILE.exists():
         try:
@@ -2623,8 +2624,10 @@ def tech_efficiency_from_events(events: pd.DataFrame, wos: pd.DataFrame) -> pd.D
     return out[cols_out]
 
 # ======= App start =======
-# Restore cloud-persisted files on cold start (no-op if S3 not configured)
-_sync_from_s3()
+# Restore cloud-persisted files once per session (not on every rerun/page nav)
+if not st.session_state.get('_s3_synced'):
+    _sync_from_s3()
+    st.session_state['_s3_synced'] = True
 
 st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="📊", initial_sidebar_state="collapsed")
 
@@ -5313,14 +5316,12 @@ elif page == "📤 Upload Data":
                 _any_saved = True
 
     if _any_saved:
-        # Drop only the computed-view cache keys so the next page load
-        # re-derives from the freshly written Parquet files.
-        # Do NOT call st.cache_data.clear() + st.rerun() — that forces an
-        # immediate full data reload while upload buffers are still in memory,
-        # causing an OOM crash on Railway.
+        # Clear session-state derived views so they rebuild from fresh data.
+        # Do NOT call st.cache_data.clear() — cache keys include file signature
+        # (mtime + size) so new files auto-miss; clearing everything wipes valid
+        # caches for other pages and causes unnecessary re-computation.
         for _k in ("__aging__", "__wip__", "__tatroll__"):
             st.session_state.pop(_k, None)
-        st.cache_data.clear()
         st.success("✅ Files saved and cached. Click **🏠 Dashboard** in the nav to load your data.")
 
     st.divider()
